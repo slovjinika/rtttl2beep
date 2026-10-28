@@ -29,14 +29,14 @@ It supports playing a default tune, executing custom RTTTL strings directly from
 1. Clone the repository or download the script:
 ```bash
 git clone https://github.com/slovjinika/rtttl2beep
-cd rtttl-player
+cd rtttl2beep
 
 ```
 
 
 2. Make sure the script is executable (optional):
 ```bash
-chmod +x script.py
+chmod +x rtttl2beep.py
 
 ```
 
@@ -51,7 +51,7 @@ Run the script from your terminal using different options depending on what you 
 ### 1. View Help Instructions
 
 ```bash
-python script.py --help
+python rtttl2beep.py --help
 
 ```
 
@@ -60,7 +60,7 @@ python script.py --help
 If no arguments are provided, the script plays the classic Nokia tune by default.
 
 ```bash
-python script.py
+python rtttl2beep.py
 
 ```
 
@@ -69,7 +69,7 @@ python script.py
 Pass your RTTTL string directly in quotes as an argument:
 
 ```bash
-python script.py "Simpsons:d=4,o=5,b=160:32p,c.6,e6,f#6,8a6,g.6,e6,c6,8a,8f#"
+python rtttl2beep.py "Simpsons:d=4,o=5,b=160:32p,c.6,e6,f#6,8a6,g.6,e6,c6,8a,8f#"
 
 ```
 
@@ -78,7 +78,7 @@ python script.py "Simpsons:d=4,o=5,b=160:32p,c.6,e6,f#6,8a6,g.6,e6,c6,8a,8f#"
 Specify a directory containing `.txt` files with RTTTL content using the `-d` or `--directory` flag:
 
 ```bash
-python script.py -d /path/to/your/rtttl_folder/
+python rtttl2beep.py -d /path/to/your/rtttl_folder/
 
 ```
 
@@ -99,7 +99,7 @@ ZeldaTheme:d=4,o=5,b=125:8a#5,16f5,8a#5,16a#5,16c6,16d6,16e6,8f6,8f6,8a#5,16f5,8
 
 ## 📜 License
 
-This project is open-source and available under the [MIT License](https://www.google.com/search?q=LICENSE).
+This project is open-source and available under the MIT License.
 
 
 
