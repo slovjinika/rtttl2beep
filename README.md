@@ -18,7 +18,8 @@ It supports playing a default tune, executing custom RTTTL strings directly from
 * **Python 3.x**
 * **Linux `beep` utility:** The script uses the system `beep` command to drive the PC speaker.
   ```bash
-  sudo apt install beep```
+  sudo apt install beep
+  ```
 
 *(Ensure your user has permission to access the PC speaker or run with appropriate privileges if needed).
 
