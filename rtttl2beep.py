@@ -163,8 +163,13 @@ def play_folder(folder_path: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Play RTTTL melodies using system sounds (beep)."
-    )
+        description=(
+            "Play RTTTL melodies using system sounds (beep).\n\n"
+            "Examples:\n"
+            "  python rtttl2beep.py\n"
+            "  python rtttl2beep.py \"NokiaTun:d=4,o=5,b=225:8e6,8d6,f#,g#\"\n"
+            "  python rtttl2beep.py -d /path/to/folder"
+        )
     parser.add_argument(
         "-d", "--directory",
         type=str,
