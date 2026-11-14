@@ -1,4 +1,4 @@
-![rtttp2beep](rtttp2beep.jpg)
+![rtttp2beep](rtttp2beep.png)
 
 # 🎵 RTTTL Player for Linux/System Sound
 
