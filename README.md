@@ -1,3 +1,5 @@
+![rtttp2beep](rtttp2beep.jpg)
+
 # 🎵 RTTTL Player for Linux/System Sound
 
 A Python-based command-line tool that parses and plays **RTTTL (Ring Tone Text Transfer Language)** melodies using system speaker sounds (`beep`). 
