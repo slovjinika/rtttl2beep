@@ -6,6 +6,8 @@ A Python-based command-line tool that parses and plays **RTTTL (Ring Tone Text T
 
 It supports playing a default tune, executing custom RTTTL strings directly from the command line, or batch-playing all `.txt` melody files stored in a directory.
 
+![rtttp2beep](rtttp2beep-logo.svg)
+
 ## 🚀 Features
 
 * **RTTTL Parser:** Full support for note durations, octaves, accidentals (`#`, `b`), dotted notes, and rests (`p`).
