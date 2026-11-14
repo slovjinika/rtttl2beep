@@ -1,0 +1,507 @@
+import os
+import platform
+import threading
+import time
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+from typing import Dict, Tuple
+
+# Визначення операційної системи для звуку
+IS_WINDOWS = platform.system() == "Windows"
+if IS_WINDOWS:
+    import winsound
+
+# Frequencies for notes in the 4th octave (Standard Pitch + Flats mapping)
+OCTAVE_4_FREQUENCIES: Dict[str, float] = {
+    'c': 261.63, 'c#': 277.18, 'db': 277.18,
+    'd': 293.66, 'd#': 311.13, 'eb': 311.13,
+    'e': 329.63, 
+    'f': 349.23, 'f#': 369.99, 'gb': 369.99,
+    'g': 392.00, 'g#': 415.30, 'ab': 415.30,
+    'a': 440.00, 'a#': 466.16, 'bb': 466.16,
+    'b': 493.88, 'p': 0.0
+}
+
+DEFAULT_NOKIA_TUNE = "NokiaTun:d=4,o=5,b=225:8e6,8d6,f#,g#,8c#6,8b,d,e,8b,8a,c#,e,2a"
+
+# Словник перекладів
+TRANSLATIONS = {
+    'en': {
+        'window_title': "RTTTL2BEEP",
+        'title_label': "🎵 RTTTL2BEEP",
+        'lang_label': "Language:",
+        'frame_single': " Play a single RTTTL melody ",
+        'play_melody': "▶ Play Melody",
+        'stop': "⏹ Stop",
+        'reset_nokia': "Reset to Nokia",
+        'frame_folder': " Play folder with files (.txt) ",
+        'browse': "📁 Browse...",
+        'play_folder': "▶ Play Folder",
+        'frame_log': " Event Log ",
+        'ready': "Ready. Choose a melody or a folder.\n",
+        'warning_playing': "Warning",
+        'warning_playing_text': "Playback is already in progress.",
+        'error': "Error",
+        'empty_melody': "Melody string cannot be empty.",
+        'empty_folder': "Please specify a folder path.",
+        'log_loaded_nokia': "Loaded default Nokia tune.",
+        'log_selected_folder': "Selected folder:",
+        'log_playing_melody': "🎵 Playing melody:",
+        'log_stopped_user': "⏹ Playback stopped by user.",
+        'log_error_format': "[Error] Invalid RTTTL string format.",
+        'log_playback_error': "[Error] Failed to play melody:",
+        'log_playback_completed': "Playback completed.",
+        'log_folder_not_valid': "[Error] Path is not a valid directory.",
+        'log_no_txt_files': "No .txt files found in the directory.",
+        'log_found_melodies': "Found melodies in directory:",
+        'log_reading_file': "Reading file:",
+        'log_empty_file': "  [Warning] File is empty. Skipping.",
+        'log_error_file': "[Error] Failed to process file:",
+        'log_folder_stopped': "⏹ Folder playback stopped by user.",
+        'log_folder_completed': "📁 Folder playback fully completed.",
+        'log_stop_requested': "Stop playback requested...",
+        'lang_en': "English",
+        'lang_uk': "Українська"
+    },
+    'uk': {
+        'window_title': "RTTTL2BEEP",
+        'title_label': "🎵 RTTTL2BEEPч",
+        'lang_label': "Мова:",
+        'frame_single': " Програти одну RTTTL-мелодію ",
+        'play_melody': "▶ Грати мелодію",
+        'stop': "⏹ Зупинити",
+        'reset_nokia': "Скинути на Nokia",
+        'frame_folder': " Програти папку з файлами (.txt) ",
+        'browse': "📁 Огляд...",
+        'play_folder': "▶ Прослухати папку",
+        'frame_log': " Журнал подій ",
+        'ready': "Готово до роботи. Оберіть мелодію або папку.\n",
+        'warning_playing': "Увага",
+        'warning_playing_text': "Відтворення вже триває.",
+        'error': "Помилка",
+        'empty_melody': "Рядок мелодії не може бути порожнім.",
+        'empty_folder': "Будь ласка, вкажіть шлях до папки.",
+        'log_loaded_nokia': "Завантажено стандартну мелодію Nokia.",
+        'log_selected_folder': "Обрано папку:",
+        'log_playing_melody': "🎵 Відтворення мелодії:",
+        'log_stopped_user': "⏹ Відтворення зупинено користувачем.",
+        'log_error_format': "[Помилка] Невірний формат RTTTL рядка.",
+        'log_playback_error': "[Помилка] Не вдалося відтворити мелодію:",
+        'log_playback_completed': "Відтворення завершено.",
+        'log_folder_not_valid': "[Помилка] Шлях не є вагідною директорією.",
+        'log_no_txt_files': "У папці не знайдено файлів .txt.",
+        'log_found_melodies': "Знайдено мелодій у папці:",
+        'log_reading_file': "Читання файлу:",
+        'log_empty_file': "  [Попередження] Файл порожній. Пропускаємо.",
+        'log_error_file': "[Помилка] Не вдалося обробити файл:",
+        'log_folder_stopped': "⏹ Відтворення папки зупинено користувачем.",
+        'log_folder_completed': "📁 Відтворення папки повністю завершено.",
+        'log_stop_requested': "Запит на зупинку відтворення...",
+        'lang_en': "English",
+        'lang_uk': "Українська"
+    }
+}
+
+
+class RtttlParser:
+    @staticmethod
+    def parse_header(settings_segment: str) -> Dict[str, int]:
+        defaults = {'d': 4, 'o': 5, 'b': 63}
+        for item in settings_segment.split(','):
+            item = item.strip()
+            if '=' in item:
+                key, val = item.split('=')
+                key = key.strip()
+                val = val.strip()
+                if key in defaults:
+                    defaults[key] = int(val)
+        return defaults
+
+    @staticmethod
+    def extract_duration_prefix(note_token: str) -> Tuple[str, str]:
+        duration_digits = ""
+        while note_token and note_token[0].isdigit():
+            duration_digits += note_token[0]
+            note_token = note_token[1:]
+        return duration_digits, note_token
+
+    @classmethod
+    def parse_note(cls, note_token: str, default_duration: int, default_octave: int) -> Dict:
+        note_token = note_token.strip().lower()
+        
+        duration_str, note_token = cls.extract_duration_prefix(note_token)
+        duration = int(duration_str) if duration_str else default_duration
+        
+        if not note_token:
+            return {}
+        
+        note_name = note_token[0]
+        note_token = note_token[1:]
+        
+        if note_token and note_token[0] in ('#', 'b'):
+            note_name += note_token[0]
+            note_token = note_token[1:]
+            
+        has_dot = False
+        if note_token and note_token[0] == '.':
+            has_dot = True
+            note_token = note_token[1:]
+            
+        octave = int(note_token) if note_token and note_token.isdigit() else default_octave
+        
+        return {
+            'name': note_name,
+            'duration_denominator': duration,
+            'has_dot': has_dot,
+            'octave': octave
+        }
+
+
+class AudioSynthesizer:
+    def __init__(self, bpm: int):
+        self.whole_note_duration_ms = (60000 * 4) / bpm
+
+    def calculate_duration(self, note: Dict) -> float:
+        duration = self.whole_note_duration_ms / note['duration_denominator']
+        if note['has_dot']:
+            duration *= 1.5
+        return duration
+
+    def calculate_frequency(self, note: Dict) -> float:
+        base_frequency = OCTAVE_4_FREQUENCIES.get(note['name'], 440.0)
+        octave_shift = note['octave'] - 4
+        return base_frequency * (2 ** octave_shift)
+
+    def play_sound(self, frequency: float, duration_ms: float) -> None:
+        sound_duration = int(duration_ms * 0.9)
+        silence_duration_ms = duration_ms * 0.1
+        
+        try:
+            if IS_WINDOWS:
+                # Вбудований звук для Windows (частота від 37 до 32767 Гц)
+                freq_int = max(37, min(32767, int(frequency)))
+                winsound.Beep(freq_int, max(1, sound_duration))
+            else:
+                # Для Linux / macOS
+                os.system(f"beep -f {frequency:.2f} -l {sound_duration}")
+        except Exception:
+            pass
+        
+        time.sleep(silence_duration_ms / 1000.0)
+
+    def play_rest(self, duration_ms: float) -> None:
+        time.sleep(duration_ms / 1000.0)
+
+
+class RtttlApp:
+    def __init__(self, root):
+        self.root = root
+        self.current_lang = 'en'
+
+        self.root.title(TRANSLATIONS[self.current_lang]['window_title'])
+        self.root.geometry("700x580")
+        self.root.minsize(600, 500)
+
+        self.stop_event = threading.Event()
+        self.is_playing = False
+        self.playing_mode = None
+
+        self.create_widgets()
+
+    def t(self, key: str) -> str:
+        return TRANSLATIONS[self.current_lang].get(key, key)
+
+    def create_widgets(self):
+        top_bar = tk.Frame(self.root)
+        top_bar.pack(fill="x", padx=15, pady=5)
+
+        self.lang_label = tk.Label(top_bar, text=self.t('lang_label'), font=("Arial", 10))
+        self.lang_label.pack(side="left")
+
+        self.lang_var = tk.StringVar(value="English")
+        self.lang_menu = tk.OptionMenu(top_bar, self.lang_var, "English", "Українська", command=self.change_language)
+        self.lang_menu.config(font=("Arial", 9), cursor="hand2")
+        self.lang_menu.pack(side="left", padx=5)
+
+        self.title_label = tk.Label(self.root, text=self.t('title_label'), font=("Arial", 16, "bold"))
+        self.title_label.pack(pady=5)
+
+        # Секція: Одна мелодія
+        self.melody_frame = tk.LabelFrame(self.root, text=self.t('frame_single'), font=("Arial", 11, "bold"), padx=10, pady=10)
+        self.melody_frame.pack(fill="x", padx=15, pady=5)
+
+        melody_container = tk.Frame(self.melody_frame)
+        melody_container.pack(fill="x", pady=5)
+
+        self.melody_text = tk.Text(melody_container, height=3, font=("Courier", 10), wrap="word")
+        melody_scrollbar = tk.Scrollbar(melody_container, orient="vertical", command=self.melody_text.yview)
+        self.melody_text.configure(yscrollcommand=melody_scrollbar.set)
+
+        self.melody_text.pack(side="left", fill="x", expand=True)
+        melody_scrollbar.pack(side="right", fill="y")
+
+        self.melody_text.insert("1.0", DEFAULT_NOKIA_TUNE)
+        self.melody_text.bind("<Control-a>", self.select_all_text)
+        self.melody_text.bind("<Control-A>", self.select_all_text)
+
+        btn_frame1 = tk.Frame(self.melody_frame)
+        btn_frame1.pack(fill="x", pady=5)
+
+        self.play_melody_btn = tk.Button(
+            btn_frame1, text=self.t('play_melody'), bg="#4CAF50", fg="white", 
+            activebackground="#45a049", activeforeground="white", font=("Arial", 10, "bold"), 
+            cursor="hand2", command=self.start_play_melody
+        )
+        self.play_melody_btn.pack(side="left", padx=5)
+
+        self.default_btn = tk.Button(btn_frame1, text=self.t('reset_nokia'), font=("Arial", 10), cursor="hand2", command=self.load_default_tune)
+        self.default_btn.pack(side="left", padx=5)
+
+        # Секція: Папка з мелодіями
+        self.folder_frame = tk.LabelFrame(self.root, text=self.t('frame_folder'), font=("Arial", 11, "bold"), padx=10, pady=10)
+        self.folder_frame.pack(fill="x", padx=15, pady=5)
+
+        folder_sub_frame = tk.Frame(self.folder_frame)
+        folder_sub_frame.pack(fill="x", pady=5)
+
+        self.folder_var = tk.StringVar()
+        self.folder_var.trace_add("write", self.on_folder_changed)
+
+        self.folder_path_entry = tk.Entry(folder_sub_frame, textvariable=self.folder_var, font=("Arial", 10))
+        self.folder_path_entry.pack(side="left", expand=True, fill="x", padx=(0, 5))
+
+        self.browse_btn = tk.Button(folder_sub_frame, text=self.t('browse'), font=("Arial", 10), cursor="hand2", command=self.browse_folder)
+        self.browse_btn.pack(side="right")
+
+        self.play_folder_btn = tk.Button(
+            self.folder_frame, text=self.t('play_folder'), bg="#2196F3", fg="white", 
+            activebackground="#0b7dda", activeforeground="white", font=("Arial", 10, "bold"), 
+            cursor="hand2", command=self.start_play_folder
+        )
+
+        # Консоль логів
+        self.log_frame = tk.LabelFrame(self.root, text=self.t('frame_log'), font=("Arial", 11, "bold"), padx=10, pady=10)
+        self.log_frame.pack(fill="both", expand=True, padx=15, pady=10)
+
+        self.log_text = scrolledtext.ScrolledText(self.log_frame, wrap=tk.WORD, font=("Courier", 9), bg="#1e1e1e", fg="#00ff00")
+        self.log_text.pack(fill="both", expand=True)
+        self.log_text.insert(tk.END, self.t('ready'))
+        self.log_text.config(state="disabled")
+
+    def select_all_text(self, event):
+        event.widget.tag_add("sel", "1.0", "end-1c")
+        return "break"
+
+    def on_folder_changed(self, *args):
+        folder_path = self.folder_var.get().strip()
+        if folder_path and os.path.isdir(folder_path):
+            if not self.play_folder_btn.winfo_ismapped() and not self.is_playing:
+                self.play_folder_btn.pack(anchor="w", pady=5)
+        else:
+            if self.play_folder_btn.winfo_ismapped():
+                self.play_folder_btn.pack_forget()
+
+    def change_language(self, selected_lang: str):
+        if selected_lang == "Українська":
+            self.current_lang = 'uk'
+        else:
+            self.current_lang = 'en'
+        self.update_ui_texts()
+
+    def update_ui_texts(self):
+        self.root.title(self.t('window_title'))
+        self.lang_label.config(text=self.t('lang_label'))
+        self.title_label.config(text=self.t('title_label'))
+        self.melody_frame.config(text=self.t('frame_single'))
+        if not self.is_playing or self.playing_mode != 'melody':
+            self.play_melody_btn.config(text=self.t('play_melody'))
+        else:
+            self.play_melody_btn.config(text=self.t('stop'))
+        self.default_btn.config(text=self.t('reset_nokia'))
+        self.folder_frame.config(text=self.t('frame_folder'))
+        self.browse_btn.config(text=self.t('browse'))
+        if not self.is_playing or self.playing_mode != 'folder':
+            self.play_folder_btn.config(text=self.t('play_folder'))
+        else:
+            self.play_folder_btn.config(text=self.t('stop'))
+        self.log_frame.config(text=self.t('frame_log'))
+
+    def log(self, message: str):
+        def _log():
+            self.log_text.config(state="normal")
+            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state="disabled")
+        self.root.after(0, _log)
+
+    def load_default_tune(self):
+        self.melody_text.delete("1.0", "end")
+        self.melody_text.insert("1.0", DEFAULT_NOKIA_TUNE)
+        self.log(self.t('log_loaded_nokia'))
+
+    def browse_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.folder_var.set(folder)
+            self.log(f"{self.t('log_selected_folder')} {folder}")
+
+    def set_playing_state(self, playing: bool, mode: str = None):
+        self.is_playing = playing
+        self.playing_mode = mode
+        
+        if playing:
+            if mode == 'melody':
+                self.play_melody_btn.config(text=self.t('stop'), bg="#d9534f", activebackground="#c9302c", command=self.stop_playback)
+                self.default_btn.config(state="disabled")
+                if self.play_folder_btn.winfo_ismapped():
+                    self.play_folder_btn.pack_forget()
+            elif mode == 'folder':
+                self.play_folder_btn.config(text=self.t('stop'), bg="#d9534f", activebackground="#c9302c", command=self.stop_playback)
+                self.play_melody_btn.config(state="disabled")
+                self.default_btn.config(state="disabled")
+                self.browse_btn.config(state="disabled")
+        else:
+            self.play_melody_btn.config(text=self.t('play_melody'), bg="#4CAF50", activebackground="#45a049", command=self.start_play_melody, state="normal")
+            self.default_btn.config(state="normal")
+            self.browse_btn.config(state="normal")
+            
+            folder_path = self.folder_var.get().strip()
+            self.play_folder_btn.config(text=self.t('play_folder'), bg="#2196F3", activebackground="#0b7dda", command=self.start_play_folder)
+            if folder_path and os.path.isdir(folder_path):
+                if not self.play_folder_btn.winfo_ismapped():
+                    self.play_folder_btn.pack(anchor="w", pady=5)
+
+    def start_play_melody(self):
+        if self.is_playing:
+            return
+        melody_str = self.melody_text.get("1.0", "end-1c").strip()
+        if not melody_str:
+            messagebox.showerror(self.t('error'), self.t('empty_melody'))
+            return
+
+        self.stop_event.clear()
+        self.set_playing_state(True, mode='melody')
+        threading.Thread(target=self._run_melody, args=(melody_str,), daemon=True).start()
+
+    def _run_melody(self, melody_str: str):
+        try:
+            segments = melody_str.strip().split(':')
+            if len(segments) < 3:
+                self.log(self.t('log_error_format'))
+                return
+
+            song_name, settings_segment, notes_segment = segments[0], segments[1], segments[2]
+            self.log(f"{self.t('log_playing_melody')} {song_name}")
+
+            defaults = RtttlParser.parse_header(settings_segment)
+            synthesizer = AudioSynthesizer(bpm=defaults['b'])
+
+            for note_token in notes_segment.split(','):
+                if self.stop_event.is_set():
+                    self.log(self.t('log_stopped_user'))
+                    break
+                note = RtttlParser.parse_note(note_token, defaults['d'], defaults['o'])
+                if not note:
+                    continue
+
+                duration_ms = synthesizer.calculate_duration(note)
+
+                if note['name'] == 'p':
+                    synthesizer.play_rest(duration_ms)
+                else:
+                    frequency = synthesizer.calculate_frequency(note)
+                    synthesizer.play_sound(frequency, duration_ms)
+        except Exception as e:
+            self.log(f"{self.t('log_playback_error')} {e}")
+        finally:
+            self.set_playing_state(False)
+            self.log(f"{self.t('log_playback_completed')}\n" + "-" * 40)
+
+    def start_play_folder(self):
+        if self.is_playing:
+            return
+        folder_path = self.folder_var.get().strip()
+        if not folder_path:
+            messagebox.showerror(self.t('error'), self.t('empty_folder'))
+            return
+
+        self.stop_event.clear()
+        self.set_playing_state(True, mode='folder')
+        threading.Thread(target=self._run_folder, args=(folder_path,), daemon=True).start()
+
+    def _run_folder(self, folder_path: str):
+        if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+            self.log(self.t('log_folder_not_valid'))
+            self.set_playing_state(False)
+            return
+
+        txt_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.txt')]
+        if not txt_files:
+            self.log(self.t('log_no_txt_files'))
+            self.set_playing_state(False)
+            return
+
+        self.log(f"{self.t('log_found_melodies')} {len(txt_files)}\n")
+
+        for file_name in sorted(txt_files):
+            if self.stop_event.is_set():
+                break
+            file_path = os.path.join(folder_path, file_name)
+            self.log(f"{self.t('log_reading_file')} {file_name}")
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    rtttl_content = f.read().strip()
+                    if not rtttl_content:
+                        self.log(self.t('log_empty_file'))
+                        continue
+
+                segments = rtttl_content.strip().split(':')
+                if len(segments) < 3:
+                    self.log(f"{self.t('log_error_format')} '{file_name}'")
+                    continue
+
+                song_name, settings_segment, notes_segment = segments[0], segments[1], segments[2]
+                self.log(f"{self.t('log_playing_melody')} {song_name}")
+
+                defaults = RtttlParser.parse_header(settings_segment)
+                synthesizer = AudioSynthesizer(bpm=defaults['b'])
+
+                for note_token in notes_segment.split(','):
+                    if self.stop_event.is_set():
+                        break
+                    note = RtttlParser.parse_note(note_token, defaults['d'], defaults['o'])
+                    if not note:
+                        continue
+                    duration_ms = synthesizer.calculate_duration(note)
+                    if note['name'] == 'p':
+                        synthesizer.play_rest(duration_ms)
+                    else:
+                        frequency = synthesizer.calculate_frequency(note)
+                        synthesizer.play_sound(frequency, duration_ms)
+
+                time.sleep(1.0)
+            except Exception as e:
+                self.log(f"{self.t('log_error_file')} '{file_name}': {e}")
+
+            self.log("-" * 40)
+
+        if self.stop_event.is_set():
+            self.log(self.t('log_folder_stopped'))
+        else:
+            self.log(self.t('log_folder_completed'))
+        self.set_playing_state(False)
+
+    def stop_playback(self):
+        self.stop_event.set()
+        self.log(self.t('log_stop_requested'))
+
+
+def main():
+    root = tk.Tk()
+    app = RtttlApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
