@@ -34,6 +34,11 @@ TRANSLATIONS = {
         'play_melody': "▶ Play Melody",
         'stop': "⏹ Stop",
         'reset_nokia': "Reset",
+        'frame_editor': " Melody Constructor ",
+        'dur_label': "Duration:",
+        'oct_label': "Octave:",
+        'btn_clear': "🗑 Clear Notes",
+        'btn_backspace': "⌫ Backspace",
         'frame_folder': " Play folder with files (.txt) ",
         'browse': "📁 Browse...",
         'play_folder': "▶ Play Folder",
@@ -71,6 +76,11 @@ TRANSLATIONS = {
         'play_melody': "▶ Грати мелодію",
         'stop': "⏹ Зупинити",
         'reset_nokia': "Скинути",
+        'frame_editor': " Конструктор мелодій ",
+        'dur_label': "Тривалість:",
+        'oct_label': "Октава:",
+        'btn_clear': "🗑 Очистити ноти",
+        'btn_backspace': "⌫ Видалити ноту",
         'frame_folder': " Програти папку з файлами (.txt) ",
         'browse': "📁 Огляд...",
         'play_folder': "▶ Прослухати папку",
@@ -178,11 +188,9 @@ class AudioSynthesizer:
         
         try:
             if IS_WINDOWS:
-                # Вбудований звук для Windows (частота від 37 до 32767 Гц)
                 freq_int = max(37, min(32767, int(frequency)))
                 winsound.Beep(freq_int, max(1, sound_duration))
             else:
-                # Для Linux / macOS
                 os.system(f"beep -f {frequency:.2f} -l {sound_duration}")
         except Exception:
             pass
@@ -199,8 +207,8 @@ class RtttlApp:
         self.current_lang = 'en'
 
         self.root.title(TRANSLATIONS[self.current_lang]['window_title'])
-        self.root.geometry("700x580")
-        self.root.minsize(600, 500)
+        self.root.geometry("700x700")
+        self.root.minsize(600, 600)
 
         self.stop_event = threading.Event()
         self.is_playing = False
@@ -256,6 +264,54 @@ class RtttlApp:
 
         self.default_btn = tk.Button(btn_frame1, text=self.t('reset_nokia'), font=("Arial", 10), cursor="hand2", command=self.load_default_tune)
         self.default_btn.pack(side="left", padx=5)
+
+        # Секція: Інтерактивний редактор нот (Конструктор)
+        self.editor_frame = tk.LabelFrame(self.root, text=self.t('frame_editor'), font=("Arial", 11, "bold"), padx=10, pady=10)
+        self.editor_frame.pack(fill="x", padx=15, pady=5)
+
+        editor_top_row = tk.Frame(self.editor_frame)
+        editor_top_row.pack(fill="x", pady=5)
+
+        self.dur_label_widget = tk.Label(editor_top_row, text=self.t('dur_label'), font=("Arial", 9))
+        self.dur_label_widget.pack(side="left", padx=(0, 2))
+        
+        self.dur_var = tk.StringVar(value="4")
+        dur_menu = tk.OptionMenu(editor_top_row, self.dur_var, "1", "2", "4", "8", "16", "32")
+        dur_menu.config(font=("Arial", 9), width=3, cursor="hand2")
+        dur_menu.pack(side="left", padx=(0, 15))
+
+        self.oct_label_widget = tk.Label(editor_top_row, text=self.t('oct_label'), font=("Arial", 9))
+        self.oct_label_widget.pack(side="left", padx=(0, 2))
+        
+        self.oct_var = tk.StringVar(value="5")
+        oct_menu = tk.OptionMenu(editor_top_row, self.oct_var, "3", "4", "5", "6", "7")
+        oct_menu.config(font=("Arial", 9), width=3, cursor="hand2")
+        oct_menu.pack(side="left", padx=(0, 15))
+
+        self.btn_clear_notes = tk.Button(editor_top_row, text=self.t('btn_clear'), font=("Arial", 9), cursor="hand2", command=self.clear_melody_notes)
+        self.btn_clear_notes.pack(side="right", padx=2)
+
+        self.btn_backspace_note = tk.Button(editor_top_row, text=self.t('btn_backspace'), font=("Arial", 9), cursor="hand2", command=self.remove_last_note)
+        self.btn_backspace_note.pack(side="right", padx=2)
+
+        notes_grid = tk.Frame(self.editor_frame)
+        notes_grid.pack(fill="x", pady=5)
+
+        notes_data = [
+            ("C", "c"), ("C#", "c#"), ("D", "d"), ("D#", "d#"), ("E", "e"),
+            ("F", "f"), ("F#", "f#"), ("G", "g"), ("G#", "g#"), ("A", "a"),
+            ("A#", "a#"), ("B", "b"), ("Pause (p)", "p")
+        ]
+
+        for index, (label, note_code) in enumerate(notes_data):
+            btn = tk.Button(
+                notes_grid, text=label, font=("Arial", 9, "bold"), width=7,
+                bg="#f0f0f0", activebackground="#d0d0d0", cursor="hand2",
+                command=lambda n=note_code: self.append_note(n)
+            )
+            row = index // 7
+            col = index % 7
+            btn.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
 
         # Секція: Папка з мелодіями
         self.folder_frame = tk.LabelFrame(self.root, text=self.t('frame_folder'), font=("Arial", 11, "bold"), padx=10, pady=10)
@@ -313,17 +369,29 @@ class RtttlApp:
         self.lang_label.config(text=self.t('lang_label'))
         self.title_label.config(text=self.t('title_label'))
         self.melody_frame.config(text=self.t('frame_single'))
+        
         if not self.is_playing or self.playing_mode != 'melody':
             self.play_melody_btn.config(text=self.t('play_melody'))
         else:
             self.play_melody_btn.config(text=self.t('stop'))
+            
         self.default_btn.config(text=self.t('reset_nokia'))
+        
+        # Оновлення текстів редактора
+        self.editor_frame.config(text=self.t('frame_editor'))
+        self.dur_label_widget.config(text=self.t('dur_label'))
+        self.oct_label_widget.config(text=self.t('oct_label'))
+        self.btn_clear_notes.config(text=self.t('btn_clear'))
+        self.btn_backspace_note.config(text=self.t('btn_backspace'))
+
         self.folder_frame.config(text=self.t('frame_folder'))
         self.browse_btn.config(text=self.t('browse'))
+        
         if not self.is_playing or self.playing_mode != 'folder':
             self.play_folder_btn.config(text=self.t('play_folder'))
         else:
             self.play_folder_btn.config(text=self.t('stop'))
+            
         self.log_frame.config(text=self.t('frame_log'))
 
     def log(self, message: str):
@@ -344,6 +412,66 @@ class RtttlApp:
         if folder:
             self.folder_var.set(folder)
             self.log(f"{self.t('log_selected_folder')} {folder}")
+
+    def append_note(self, note_name: str):
+        dur = self.dur_var.get()
+        octave = self.oct_var.get()
+        
+        if note_name == 'p':
+            token = f"{dur}p"
+        else:
+            token = f"{dur}{note_name}{octave}"
+            
+        current_text = self.melody_text.get("1.0", "end-1c").strip()
+        
+        if ':' in current_text:
+            parts = current_text.split(':')
+            if len(parts) >= 3:
+                notes_segment = parts[2].strip()
+                if notes_segment and not notes_segment.endswith(','):
+                    notes_segment += f",{token}"
+                elif notes_segment:
+                    notes_segment += token
+                else:
+                    notes_segment = token
+                parts[2] = notes_segment
+                new_text = ":".join(parts)
+                self.melody_text.delete("1.0", "end")
+                self.melody_text.insert("1.0", new_text)
+            else:
+                self._fallback_append(token)
+        else:
+            self._fallback_append(token)
+
+    def _fallback_append(self, token: str):
+        current_text = self.melody_text.get("1.0", "end-1c")
+        if current_text and not current_text.endswith(',') and not current_text.endswith(':'):
+            self.melody_text.insert("end", f",{token}")
+        else:
+            self.melody_text.insert("end", token)
+
+    def clear_melody_notes(self):
+        current_text = self.melody_text.get("1.0", "end-1c").strip()
+        if ':' in current_text:
+            parts = current_text.split(':')
+            if len(parts) >= 3:
+                parts[2] = ""
+                self.melody_text.delete("1.0", "end")
+                self.melody_text.insert("1.0", ":".join(parts))
+        else:
+            self.melody_text.delete("1.0", "end")
+
+    def remove_last_note(self):
+        current_text = self.melody_text.get("1.0", "end-1c").strip()
+        if ':' in current_text:
+            parts = current_text.split(':')
+            if len(parts) >= 3:
+                notes = [n.strip() for n in parts[2].split(',') if n.strip()]
+                if notes:
+                    notes.pop()
+                    parts[2] = ",".join(notes)
+                    self.melody_text.delete("1.0", "end")
+                    self.melody_text.insert("1.0", ":".join(parts))
 
     def set_playing_state(self, playing: bool, mode: str = None):
         self.is_playing = playing
