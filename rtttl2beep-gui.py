@@ -1,12 +1,21 @@
 import os
 import platform
+import struct
+import math
+import subprocess
 import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from typing import Dict, Tuple
 
-# Визначення операційної системи для звуку
+# Ініціалізація Pygame для звуку
+try:
+    import pygame
+    PYGAME_AVAILABLE = True
+except ImportError:
+    PYGAME_AVAILABLE = False
+
 IS_WINDOWS = platform.system() == "Windows"
 if IS_WINDOWS:
     import winsound
@@ -30,6 +39,10 @@ TRANSLATIONS = {
         'window_title': "RTTTL2BEEP",
         'title_label': "🎵 RTTTL2BEEP",
         'lang_label': "Language:",
+        'backend_label': "Audio Engine:",
+        'backend_speaker': "PC Speaker",
+        'backend_pygame': "Pygame (Muted/Soft)",
+        'backend_alsa': "ALSA (aplay / Pulse)",
         'frame_single': " Play a single RTTTL melody ",
         'play_melody': "▶ Play Melody",
         'stop': "⏹ Stop",
@@ -45,7 +58,6 @@ TRANSLATIONS = {
         'frame_log': " Event Log ",
         'ready': "Ready. Choose a melody or a folder.\n",
         'warning_playing': "Warning",
-        'warning_playing_text': "Playback is already in progress.",
         'error': "Error",
         'empty_melody': "Melody string cannot be empty.",
         'empty_folder': "Please specify a folder path.",
@@ -65,6 +77,7 @@ TRANSLATIONS = {
         'log_folder_stopped': "⏹ Folder playback stopped by user.",
         'log_folder_completed': "📁 Folder playback fully completed.",
         'log_stop_requested': "Stop playback requested...",
+        'log_pygame_missing': "[Error] Pygame is not installed! Run: pip install pygame",
         'lang_en': "English",
         'lang_uk': "Українська"
     },
@@ -72,6 +85,10 @@ TRANSLATIONS = {
         'window_title': "RTTTL2BEEP",
         'title_label': "🎵 RTTTL2BEEP",
         'lang_label': "Мова:",
+        'backend_label': "Аудіо-рушій:",
+        'backend_speaker': "PC Speaker",
+        'backend_pygame': "Pygame (М'який звук)",
+        'backend_alsa': "ALSA (aplay / Pulse)",
         'frame_single': " Програти одну RTTTL-мелодію ",
         'play_melody': "▶ Грати мелодію",
         'stop': "⏹ Зупинити",
@@ -87,7 +104,6 @@ TRANSLATIONS = {
         'frame_log': " Журнал подій ",
         'ready': "Готово до роботи. Оберіть мелодію або папку.\n",
         'warning_playing': "Увага",
-        'warning_playing_text': "Відтворення вже триває.",
         'error': "Помилка",
         'empty_melody': "Рядок мелодії не може бути порожнім.",
         'empty_folder': "Будь ласка, вкажіть шлях до папки.",
@@ -107,6 +123,7 @@ TRANSLATIONS = {
         'log_folder_stopped': "⏹ Відтворення папки зупинено користувачем.",
         'log_folder_completed': "📁 Відтворення папки повністю завершено.",
         'log_stop_requested': "Запит на зупинку відтворення...",
+        'log_pygame_missing': "[Помилка] Бібліотеку Pygame не знайдено! Встановіть: pip install pygame",
         'lang_en': "English",
         'lang_uk': "Українська"
     }
@@ -168,8 +185,19 @@ class RtttlParser:
 
 
 class AudioSynthesizer:
-    def __init__(self, bpm: int):
+    def __init__(self, bpm: int, backend: str = "speaker", logger_callback=None):
         self.whole_note_duration_ms = (60000 * 4) / bpm
+        self.backend = backend
+        self.sample_rate = 22050
+        self.logger = logger_callback
+        
+        if self.backend == "pygame" and PYGAME_AVAILABLE:
+            try:
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init(frequency=self.sample_rate, size=-16, channels=1, buffer=512)
+            except Exception as e:
+                if self.logger:
+                    self.logger(f"[Error initializing pygame mixer] {e}")
 
     def calculate_duration(self, note: Dict) -> float:
         duration = self.whole_note_duration_ms / note['duration_denominator']
@@ -182,23 +210,93 @@ class AudioSynthesizer:
         octave_shift = note['octave'] - 4
         return base_frequency * (2 ** octave_shift)
 
-    def play_sound(self, frequency: float, duration_ms: float) -> None:
-        sound_duration = int(duration_ms * 0.9)
-        silence_duration_ms = duration_ms * 0.1
+    def play_sound(self, frequency: float, duration_ms: float, stop_event: threading.Event = None) -> None:
+        sound_duration = int(duration_ms * 0.85)
+        silence_duration_ms = duration_ms * 0.15
         
         try:
-            if IS_WINDOWS:
-                freq_int = max(37, min(32767, int(frequency)))
-                winsound.Beep(freq_int, max(1, sound_duration))
+            num_samples = int(self.sample_rate * (sound_duration / 1000.0))
+            if num_samples < 1:
+                return
+            
+            # Генерація синусоїдального буфера з огинаючою (envelope) проти клацань
+            samples = bytearray()
+            for i in range(num_samples):
+                t = i / self.sample_rate
+                envelope = 1.0
+                if i < 300:
+                    envelope = i / 300.0
+                elif i > num_samples - 300:
+                    envelope = (num_samples - i) / 300.0
+                    
+                val = int(16383 * envelope * math.sin(2 * math.pi * frequency * t))
+                samples.extend(struct.pack('<h', val))
+
+            if self.backend == "pygame":
+                if not PYGAME_AVAILABLE:
+                    return
+                sound = pygame.mixer.Sound(buffer=bytes(samples))
+                sound.play()
+                self._interruptible_sleep(sound_duration / 1000.0, stop_event)
+                
+            elif self.backend == "alsa":
+                wav_data = self._create_wav_header(len(samples)) + samples
+                try:
+                    proc = subprocess.Popen(['aplay', '-q', '-t', 'wav'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    proc.stdin.write(wav_data)
+                    proc.stdin.close()
+                    
+                    slept = 0.0
+                    step = 0.02
+                    while slept < (sound_duration / 1000.0):
+                        if stop_event and stop_event.is_set():
+                            proc.terminate()
+                            break
+                        time.sleep(step)
+                        slept += step
+                    proc.wait()
+                except Exception as ex:
+                    if self.logger:
+                        self.logger(f"[ALSA Error] {ex}")
             else:
-                os.system(f"beep -f {frequency:.2f} -l {sound_duration}")
+                if IS_WINDOWS:
+                    freq_int = max(37, min(32767, int(frequency)))
+                    winsound.Beep(freq_int, max(1, sound_duration))
+                else:
+                    os.system(f"beep -f {frequency:.2f} -l {sound_duration}")
         except Exception:
             pass
         
-        time.sleep(silence_duration_ms / 1000.0)
+        self._interruptible_sleep(silence_duration_ms / 1000.0, stop_event)
 
-    def play_rest(self, duration_ms: float) -> None:
-        time.sleep(duration_ms / 1000.0)
+    def play_rest(self, duration_ms: float, stop_event: threading.Event = None) -> None:
+        self._interruptible_sleep(duration_ms / 1000.0, stop_event)
+
+    def _interruptible_sleep(self, duration_sec: float, stop_event: threading.Event = None):
+        slept = 0.0
+        step = 0.02
+        while slept < duration_sec:
+            if stop_event and stop_event.is_set():
+                break
+            time.sleep(step)
+            slept += step
+
+    def _create_wav_header(self, data_size: int) -> bytearray:
+        header = bytearray()
+        header.extend(b'RIFF')
+        header.extend(struct.pack('<I', 36 + data_size))
+        header.extend(b'WAVE')
+        header.extend(b'fmt ')
+        header.extend(struct.pack('<I', 16))
+        header.extend(struct.pack('<H', 1))
+        header.extend(struct.pack('<H', 1))
+        header.extend(struct.pack('<I', self.sample_rate))
+        header.extend(struct.pack('<I', self.sample_rate * 2))
+        header.extend(struct.pack('<H', 2))
+        header.extend(struct.pack('<H', 16))
+        header.extend(b'data')
+        header.extend(struct.pack('<I', data_size))
+        return header
 
 
 class RtttlApp:
@@ -207,8 +305,8 @@ class RtttlApp:
         self.current_lang = 'en'
 
         self.root.title(TRANSLATIONS[self.current_lang]['window_title'])
-        self.root.geometry("700x700")
-        self.root.minsize(600, 600)
+        self.root.geometry("720x740")
+        self.root.minsize(620, 620)
 
         self.stop_event = threading.Event()
         self.is_playing = False
@@ -230,6 +328,15 @@ class RtttlApp:
         self.lang_menu = tk.OptionMenu(top_bar, self.lang_var, "English", "Українська", command=self.change_language)
         self.lang_menu.config(font=("Arial", 9), cursor="hand2")
         self.lang_menu.pack(side="left", padx=5)
+
+        self.backend_label = tk.Label(top_bar, text=self.t('backend_label'), font=("Arial", 10))
+        self.backend_label.pack(side="left", padx=(15, 2))
+
+        # Порядок: PC Speaker на першому місці, ALSA на останньому
+        self.backend_var = tk.StringVar(value="PC Speaker")
+        self.backend_menu = tk.OptionMenu(top_bar, self.backend_var, "PC Speaker", "Pygame (Muted/Soft)", "ALSA (aplay / Pulse)")
+        self.backend_menu.config(font=("Arial", 9), cursor="hand2")
+        self.backend_menu.pack(side="left", padx=5)
 
         self.title_label = tk.Label(self.root, text=self.t('title_label'), font=("Arial", 16, "bold"))
         self.title_label.pack(pady=5)
@@ -367,6 +474,7 @@ class RtttlApp:
     def update_ui_texts(self):
         self.root.title(self.t('window_title'))
         self.lang_label.config(text=self.t('lang_label'))
+        self.backend_label.config(text=self.t('backend_label'))
         self.title_label.config(text=self.t('title_label'))
         self.melody_frame.config(text=self.t('frame_single'))
         
@@ -377,7 +485,6 @@ class RtttlApp:
             
         self.default_btn.config(text=self.t('reset_nokia'))
         
-        # Оновлення текстів редактора
         self.editor_frame.config(text=self.t('frame_editor'))
         self.dur_label_widget.config(text=self.t('dur_label'))
         self.oct_label_widget.config(text=self.t('oct_label'))
@@ -481,6 +588,7 @@ class RtttlApp:
             if mode == 'melody':
                 self.play_melody_btn.config(text=self.t('stop'), bg="#d9534f", activebackground="#c9302c", command=self.stop_playback)
                 self.default_btn.config(state="disabled")
+                self.backend_menu.config(state="disabled")
                 if self.play_folder_btn.winfo_ismapped():
                     self.play_folder_btn.pack_forget()
             elif mode == 'folder':
@@ -488,10 +596,12 @@ class RtttlApp:
                 self.play_melody_btn.config(state="disabled")
                 self.default_btn.config(state="disabled")
                 self.browse_btn.config(state="disabled")
+                self.backend_menu.config(state="disabled")
         else:
             self.play_melody_btn.config(text=self.t('play_melody'), bg="#4CAF50", activebackground="#45a049", command=self.start_play_melody, state="normal")
             self.default_btn.config(state="normal")
             self.browse_btn.config(state="normal")
+            self.backend_menu.config(state="normal")
             
             folder_path = self.folder_var.get().strip()
             self.play_folder_btn.config(text=self.t('play_folder'), bg="#2196F3", activebackground="#0b7dda", command=self.start_play_folder)
@@ -499,9 +609,25 @@ class RtttlApp:
                 if not self.play_folder_btn.winfo_ismapped():
                     self.play_folder_btn.pack(anchor="w", pady=5)
 
+    def get_selected_backend(self) -> str:
+        val = self.backend_var.get()
+        if "Pygame" in val:
+            return "pygame"
+        elif "ALSA" in val:
+            return "alsa"
+        else:
+            return "speaker"
+
     def start_play_melody(self):
         if self.is_playing:
             return
+        
+        backend_type = self.get_selected_backend()
+        if backend_type == "pygame" and not PYGAME_AVAILABLE:
+            messagebox.showerror(self.t('error'), self.t('log_pygame_missing'))
+            self.log(self.t('log_pygame_missing'))
+            return
+
         melody_str = self.melody_text.get("1.0", "end-1c").strip()
         if not melody_str:
             messagebox.showerror(self.t('error'), self.t('empty_melody'))
@@ -509,9 +635,10 @@ class RtttlApp:
 
         self.stop_event.clear()
         self.set_playing_state(True, mode='melody')
-        threading.Thread(target=self._run_melody, args=(melody_str,), daemon=True).start()
+        
+        threading.Thread(target=self._run_melody, args=(melody_str, backend_type), daemon=True).start()
 
-    def _run_melody(self, melody_str: str):
+    def _run_melody(self, melody_str: str, backend_type: str):
         try:
             segments = melody_str.strip().split(':')
             if len(segments) < 3:
@@ -522,7 +649,7 @@ class RtttlApp:
             self.log(f"{self.t('log_playing_melody')} {song_name}")
 
             defaults = RtttlParser.parse_header(settings_segment)
-            synthesizer = AudioSynthesizer(bpm=defaults['b'])
+            synthesizer = AudioSynthesizer(bpm=defaults['b'], backend=backend_type, logger_callback=self.log)
 
             for note_token in notes_segment.split(','):
                 if self.stop_event.is_set():
@@ -535,10 +662,10 @@ class RtttlApp:
                 duration_ms = synthesizer.calculate_duration(note)
 
                 if note['name'] == 'p':
-                    synthesizer.play_rest(duration_ms)
+                    synthesizer.play_rest(duration_ms, self.stop_event)
                 else:
                     frequency = synthesizer.calculate_frequency(note)
-                    synthesizer.play_sound(frequency, duration_ms)
+                    synthesizer.play_sound(frequency, duration_ms, self.stop_event)
         except Exception as e:
             self.log(f"{self.t('log_playback_error')} {e}")
         finally:
@@ -548,6 +675,13 @@ class RtttlApp:
     def start_play_folder(self):
         if self.is_playing:
             return
+            
+        backend_type = self.get_selected_backend()
+        if backend_type == "pygame" and not PYGAME_AVAILABLE:
+            messagebox.showerror(self.t('error'), self.t('log_pygame_missing'))
+            self.log(self.t('log_pygame_missing'))
+            return
+
         folder_path = self.folder_var.get().strip()
         if not folder_path:
             messagebox.showerror(self.t('error'), self.t('empty_folder'))
@@ -555,9 +689,10 @@ class RtttlApp:
 
         self.stop_event.clear()
         self.set_playing_state(True, mode='folder')
-        threading.Thread(target=self._run_folder, args=(folder_path,), daemon=True).start()
+        
+        threading.Thread(target=self._run_folder, args=(folder_path, backend_type), daemon=True).start()
 
-    def _run_folder(self, folder_path: str):
+    def _run_folder(self, folder_path: str, backend_type: str):
         if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
             self.log(self.t('log_folder_not_valid'))
             self.set_playing_state(False)
@@ -593,7 +728,7 @@ class RtttlApp:
                 self.log(f"{self.t('log_playing_melody')} {song_name}")
 
                 defaults = RtttlParser.parse_header(settings_segment)
-                synthesizer = AudioSynthesizer(bpm=defaults['b'])
+                synthesizer = AudioSynthesizer(bpm=defaults['b'], backend=backend_type, logger_callback=self.log)
 
                 for note_token in notes_segment.split(','):
                     if self.stop_event.is_set():
@@ -603,14 +738,14 @@ class RtttlApp:
                         continue
                     duration_ms = synthesizer.calculate_duration(note)
                     if note['name'] == 'p':
-                        synthesizer.play_rest(duration_ms)
+                        synthesizer.play_rest(duration_ms, self.stop_event)
                     else:
                         frequency = synthesizer.calculate_frequency(note)
-                        synthesizer.play_sound(frequency, duration_ms)
+                        synthesizer.play_sound(frequency, duration_ms, self.stop_event)
 
                 time.sleep(1.0)
             except Exception as e:
-                self.log(f"{self.t('log_error_file')} '{file_name}': {e}")
+                self.log(self.t('log_error_file') + f" '{file_name}': {e}")
 
             self.log("-" * 40)
 
