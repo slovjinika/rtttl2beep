@@ -45,6 +45,7 @@ TRANSLATIONS = {
         'backend_alsa': "ALSA (aplay / Pulse)",
         'frame_single': " Play a single RTTTL melody ",
         'play_melody': "▶ Play Melody",
+        'save_wav': "💾 Save as WAV",
         'stop': "⏹ Stop",
         'reset_nokia': "Reset",
         'frame_editor': " Melody Constructor ",
@@ -64,6 +65,8 @@ TRANSLATIONS = {
         'log_loaded_nokia': "Loaded default Nokia tune.",
         'log_selected_folder': "Selected folder:",
         'log_playing_melody': "🎵 Playing melody:",
+        'log_saved_wav': "💾 Melody saved to WAV:",
+        'log_save_error': "[Error] Failed to save WAV:",
         'log_stopped_user': "⏹ Playback stopped by user.",
         'log_error_format': "[Error] Invalid RTTTL string format.",
         'log_playback_error': "[Error] Failed to play melody:",
@@ -91,6 +94,7 @@ TRANSLATIONS = {
         'backend_alsa': "ALSA (aplay / Pulse)",
         'frame_single': " Програти одну RTTTL-мелодію ",
         'play_melody': "▶ Грати мелодію",
+        'save_wav': "💾 Зберегти у WAV",
         'stop': "⏹ Зупинити",
         'reset_nokia': "Скинути",
         'frame_editor': " Конструктор мелодій ",
@@ -110,11 +114,13 @@ TRANSLATIONS = {
         'log_loaded_nokia': "Завантажено стандартну мелодію Nokia.",
         'log_selected_folder': "Обрано папку:",
         'log_playing_melody': "🎵 Відтворення мелодії:",
+        'log_saved_wav': "💾 Мелодію збережено у WAV:",
+        'log_save_error': "[Помилка] Не вдалося зберегти WAV:",
         'log_stopped_user': "⏹ Відтворення зупинено користувачем.",
         'log_error_format': "[Помилка] Невірний формат RTTTL рядка.",
         'log_playback_error': "[Помилка] Не вдалося відтворити мелодію:",
         'log_playback_completed': "Відтворення завершено.",
-        'log_folder_not_valid': "[Помилка] Шлях не є вагідною директорією.",
+        'log_folder_not_valid': "[Помилка] Шлях не є валідною директорією.",
         'log_no_txt_files': "У папці не знайдено файлів .txt.",
         'log_found_melodies': "Знайдено мелодій у папці:",
         'log_reading_file': "Читання файлу:",
@@ -209,6 +215,57 @@ class AudioSynthesizer:
         base_frequency = OCTAVE_4_FREQUENCIES.get(note['name'], 440.0)
         octave_shift = note['octave'] - 4
         return base_frequency * (2 ** octave_shift)
+
+    def generate_note_samples(self, frequency: float, duration_ms: float) -> bytearray:
+        """Генерує PCM семпли для однієї ноти (звук + коротка пауза після ноти)."""
+        samples = bytearray()
+        sound_duration_ms = duration_ms * 0.85
+        silence_duration_ms = duration_ms * 0.15
+
+        num_sound_samples = int(self.sample_rate * (sound_duration_ms / 1000.0))
+        if num_sound_samples > 0:
+            for i in range(num_sound_samples):
+                t = i / self.sample_rate
+                envelope = 1.0
+                if i < 300:
+                    envelope = i / 300.0
+                elif i > num_sound_samples - 300:
+                    envelope = (num_sound_samples - i) / 300.0
+                    
+                val = int(16383 * envelope * math.sin(2 * math.pi * frequency * t))
+                samples.extend(struct.pack('<h', val))
+
+        num_silence_samples = int(self.sample_rate * (silence_duration_ms / 1000.0))
+        if num_silence_samples > 0:
+            samples.extend(b'\x00\x00' * num_silence_samples)
+
+        return samples
+
+    def generate_rest_samples(self, duration_ms: float) -> bytearray:
+        """Генерує PCM семпли тиші для паузи."""
+        num_samples = int(self.sample_rate * (duration_ms / 1000.0))
+        if num_samples > 0:
+            return bytearray(b'\x00\x00' * num_samples)
+        return bytearray()
+
+    def save_to_wav(self, notes_segment: str, default_duration: int, default_octave: int, file_path: str) -> None:
+        """Рендерить усю мелодію в буфер та зберігає у WAV-файл."""
+        all_samples = bytearray()
+        for note_token in notes_segment.split(','):
+            note = RtttlParser.parse_note(note_token, default_duration, default_octave)
+            if not note:
+                continue
+            duration_ms = self.calculate_duration(note)
+            if note['name'] == 'p':
+                all_samples.extend(self.generate_rest_samples(duration_ms))
+            else:
+                frequency = self.calculate_frequency(note)
+                all_samples.extend(self.generate_note_samples(frequency, duration_ms))
+
+        wav_header = self._create_wav_header(len(all_samples))
+        with open(file_path, 'wb') as f:
+            f.write(wav_header)
+            f.write(all_samples)
 
     def play_sound(self, frequency: float, duration_ms: float, stop_event: threading.Event = None) -> None:
         sound_duration = int(duration_ms * 0.85)
@@ -369,6 +426,13 @@ class RtttlApp:
         )
         self.play_melody_btn.pack(side="left", padx=5)
 
+        self.save_wav_btn = tk.Button(
+            btn_frame1, text=self.t('save_wav'), bg="#2196F3", fg="white",
+            activebackground="#0b7dda", activeforeground="white", font=("Arial", 10, "bold"),
+            cursor="hand2", command=self.save_melody_wav
+        )
+        self.save_wav_btn.pack(side="left", padx=5)
+
         self.default_btn = tk.Button(btn_frame1, text=self.t('reset_nokia'), font=("Arial", 10), cursor="hand2", command=self.load_default_tune)
         self.default_btn.pack(side="left", padx=5)
 
@@ -482,7 +546,8 @@ class RtttlApp:
             self.play_melody_btn.config(text=self.t('play_melody'))
         else:
             self.play_melody_btn.config(text=self.t('stop'))
-            
+
+        self.save_wav_btn.config(text=self.t('save_wav'))
         self.default_btn.config(text=self.t('reset_nokia'))
         
         self.editor_frame.config(text=self.t('frame_editor'))
@@ -513,6 +578,38 @@ class RtttlApp:
         self.melody_text.delete("1.0", "end")
         self.melody_text.insert("1.0", DEFAULT_NOKIA_TUNE)
         self.log(self.t('log_loaded_nokia'))
+
+    def save_melody_wav(self):
+        melody_str = self.melody_text.get("1.0", "end-1c").strip()
+        if not melody_str:
+            messagebox.showerror(self.t('error'), self.t('empty_melody'))
+            return
+
+        segments = melody_str.split(':')
+        if len(segments) < 3:
+            messagebox.showerror(self.t('error'), self.t('log_error_format'))
+            self.log(self.t('log_error_format'))
+            return
+
+        song_name, settings_segment, notes_segment = segments[0].strip(), segments[1], segments[2]
+        safe_name = "".join(c for c in song_name if c.isalnum() or c in (' ', '-', '_')).strip() or "melody"
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".wav",
+            initialfile=f"{safe_name}.wav",
+            filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        try:
+            defaults = RtttlParser.parse_header(settings_segment)
+            synthesizer = AudioSynthesizer(bpm=defaults['b'], backend="wav", logger_callback=self.log)
+            synthesizer.save_to_wav(notes_segment, defaults['d'], defaults['o'], file_path)
+            self.log(f"{self.t('log_saved_wav')} {file_path}")
+        except Exception as e:
+            messagebox.showerror(self.t('error'), f"{self.t('log_save_error')} {e}")
+            self.log(f"{self.t('log_save_error')} {e}")
 
     def browse_folder(self):
         folder = filedialog.askdirectory()
@@ -587,6 +684,7 @@ class RtttlApp:
         if playing:
             if mode == 'melody':
                 self.play_melody_btn.config(text=self.t('stop'), bg="#d9534f", activebackground="#c9302c", command=self.stop_playback)
+                self.save_wav_btn.config(state="disabled")
                 self.default_btn.config(state="disabled")
                 self.backend_menu.config(state="disabled")
                 if self.play_folder_btn.winfo_ismapped():
@@ -594,11 +692,13 @@ class RtttlApp:
             elif mode == 'folder':
                 self.play_folder_btn.config(text=self.t('stop'), bg="#d9534f", activebackground="#c9302c", command=self.stop_playback)
                 self.play_melody_btn.config(state="disabled")
+                self.save_wav_btn.config(state="disabled")
                 self.default_btn.config(state="disabled")
                 self.browse_btn.config(state="disabled")
                 self.backend_menu.config(state="disabled")
         else:
             self.play_melody_btn.config(text=self.t('play_melody'), bg="#4CAF50", activebackground="#45a049", command=self.start_play_melody, state="normal")
+            self.save_wav_btn.config(state="normal")
             self.default_btn.config(state="normal")
             self.browse_btn.config(state="normal")
             self.backend_menu.config(state="normal")
